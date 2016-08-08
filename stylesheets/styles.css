@@ -421,3 +421,17 @@ footer {
     color:#444;
   }
 }
+
+/* tweaks */
+
+.color-red {
+  color: red;
+}
+
+code {
+  background: #FDFEFB;
+}
+
+.grayish {
+  color: #666;
+}

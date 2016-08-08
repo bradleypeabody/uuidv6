@@ -4,6 +4,7 @@
     <meta charset="utf-8">
     <meta http-equiv="X-UA-Compatible" content="chrome=1">
     <title>"Version 6" UUIDs</title>
+    <meta name="description" content="UUID 'Version 6' is an alternate format which sorts correctly as raw bytes and is suitable for use as a primary key value in a database.">
 
     <link rel="stylesheet" href="stylesheets/styles.css">
     <link rel="stylesheet" href="stylesheets/github-light.css">
@@ -42,40 +43,166 @@
         describes 5 versions, indicated for use in various cases.</p>
 
         <p>This document describes a proposed sixth version which in the author's
-        opinion addresses a relatively minor but nonethless significant shortcoming
+        opinion addresses a relatively minor but nonetheless significant shortcoming
         in the UUID specification, specifically when compared to the Version 1
         UUIDs from the RFC.</p>
 
         <h3>Motivation</h3>
 
-        <p>RFC 4122 is dated July 2005.  Times have changed.  Today, applications
-        are frequently far more distributed, CPUs are faster and </p>
+        <p>RFC 4122 is dated July 2005.  Times have changed.  Today, CPUs are
+        faster and applications are frequently far more distributed.  <strong>This 
+        results in an increased need to generate globally unique identifiers
+        on different nodes in a distributed system and have these contain
+        properties appropriate for a database primary key.</strong></p>
 
-        <p>[database primary key]
-
-        <p>Existing RFC comes close, but stops short of solving this problem.
-        [none of the versions have all of these properties]:
+        <p>The existing RFC comes close, but stops short of describing a UUID
+        suitable to this scenario.  Specifically, a value useful for
+        this case would have the following properties:
 
         <ul>
-          <li>[easily sortable by time]</li>
-          <li>[time embedded, can be used as the 'create time' of the record]</li>
-          <li>[globally unique]</li>
+          <li><strong>Sorting by its raw bytes results in a sequence equivalent
+          to sorting by its
+          embedded timestamp,</strong> thus making it naturally more useful as a
+          primary key and providing improved reference locality and thus
+          insert performance.  (I.e. primary keys that are out of sequence are
+          not just useless for sorting, but can also cause unnecessary disk
+          access due to occupying significantly different locations in
+          the index. <a target="_blank" href="https://www.percona.com/blog/2014/12/19/store-uuid-optimized-way/">[example]</a>)</li>
+          <li><strong>The embedded time should be extractable</strong> for use as the
+          creation time of the record.</li>
+          <li><strong>Global uniqueness,</strong> which is of course a basic requirement
+          of all types of UUIDs.</li>
         </ul>
 
-        <h3>Specification</h3>
+        <p>Unfortunately, none of the existing 5 UUID versions meet all
+        3 requirements.  The main issue being that the byte sequence
+        for the time field makes meeting the first requirement impossible
+        with the existing specification.</p>
 
-        <p>[describe primarily as differences from the RFC]</p>
+<!--         <h3>Useful Scenarios</h3>
 
-        <p>[version and variant fields remain in the same position]</p>
+        <p>Here are just a few examples of cases where such a UUID would be
+        applicable:
+        <ul>
+          <li>https://www.percona.com/blog/2014/12/19/store-uuid-optimized-way/</li>
+          <li>https://blog.codinghorror.com/primary-keys-ids-versus-guids/</li>
+          <li>http://forums.mysql.com/read.php?98,49626,172029</li>
+        </ul>
+ -->
+        <h3>Specification for 'Version 6'</h3>
 
-        <h4>point out clock sequence behavior diff</h4>
+        <p><em>TLDR: 'Version 6' UUIDs have the date/time encoded from high to low
+        bytes (bit-shifting around the version field in order to preserve its
+        location) and thus sort correctly by time when treated as an
+        opaque bunch of bytes; the clock
+        sequence can be used to avoid duplicates generated at the same
+        time; it's okay to use random data from a good PRNG in place
+        of the MAC address; the rest is the same as RFC&nbsp;4122.</em></p>
+
+        <p>The description here will be kept primarily to the differences
+        from what is given in the RFC.</p>
+
+        <h4>Timestamp</h4>
+
+        <p>The only fields that change layout are the ones related to the timestamp.
+        The version field retains its same position for backward compatibility,
+        so applications can test for the version number in a consistent
+        way.  Assuming the timestamp begins as a 60-bit unsigned integer
+        (usually implemented as a 64-bit unsigned int with the top 4 bits
+        unused), the most significant 48 bits of the timestamp appear
+        first (in order from most significant first, toward least significant),
+        followed by the 4-bit version field, followed by the remaining 12 bits
+        from the timestamp.<p>
+
+        <p>That gives a layout as follows: (timestamp shown in red)</p>
+
+<pre><code><strong>Bytes 0-7:</strong> (each digit shown is hex, 4 bits)
+    <span class="color-red">00 00 00 00  00 00</span> 0<span class="color-red">0 00</span>
+    |                | ||  |
+     ----------------  ||  |
+    timestamp          ||  |
+    bits 59-12         ||  |
+                 version|  |
+                         --
+                  timestamp
+                  bits 11-0
+
+<strong>Bytes 8-15:</strong> (same as RFC 4122)
+    00 00 00 00  00 00 00 00
+    ||  | |                |
+    ||  |  ________________
+    ||  |       node
+    | --
+    | clock seq bits 11-0
+    2 bits variant, 2 bits
+    are 13-12 of clock seq
+
+<span class="grayish">NOTE: Just to be perfectly clear, even though the bit numbers
+are given from high to low, what is being indicated is that
+the byte sequence is big-endian, NOT that the bits should somehow
+be reversed bit by bit.  I would have used bytes but the version
+field is only 4 bits, so it's necessary to describe the fields
+in terms of their bit sizes.   Hopefully all that is apparent.</span>
+</code></pre>
+
+        <p>Assuming <code>t</code> is a 64-bit unsigned integer (<code>uint64_t</code>)
+        containing the timestamp as described in the RFC (in hundred-nanosecond intervals
+        since midnight 15 October 1582 UTC), the C code to make the adjustment
+        described above would be:
+
+        <p><code>((t &lt;&lt; 4) &amp; 0xFFFFFFFFFFFF0000) | (t &amp; 0x0FFF) | 0x6000</code></p>
+
+        <p><span class="grayish">n.b. (the <code>0x6000</code> value is of course the version number - 6)</span>
+
+        <p>This would then be written in network byte order/big-endian to output
+        the first 8 bytes of the UUID, i.e. the first byte would get the value
+        <code>(t >> 56)</code> the second would be <code>((t >> 48) &amp; 0xFF)</code>, etc.</p>
+
+        <h4>Clock Sequence</h4>
+
+        <p>In order to prevent duplicates on modern systems where it is very
+        possible to have two UUIDs created within the same hundred-nanosecond
+        interval, a minor difference is indicated in the behavior of the clock
+        sequence field (see RFC <a target="rfc4122" href="https://tools.ietf.org/html/rfc4122#section-4.1.5">section 4.1.5</a>).  Instead of <a target="rfc4122" 
+        href="https://tools.ietf.org/html/rfc4122#section-4.2.1.2">returning an
+        error or blocking</a> (both of which are undesirable and unnecessary) if
+        a duplicate UUID would be returned due to this case, instead the
+        clock sequence should be incremented and used for the would-be duplicate ID -
+        thus making it unique.  This is the same action described in the RFC
+        should the clock move backward and it works just as well in this case.
+        In practice, this can be implemented as simple as (C) code like the
+        following, run in a critical section:
+
+        <p><pre><code>if (last_timestamp >= this_timestamp) {
+    clock_sequence++;
+}</code></pre>
+
+        <h4>Node Field Value</h4>
+
+        <p>In section <a target="rfc4122" href="https://tools.ietf.org/html/rfc4122#section-4.5">4.5
+        of the RFC</a> it describes an alternate method for populating the node
+        field if the use of a MAC address (IEEE 802) is not desired.  Statements
+        earlier in the document (e.g. <em>"For systems with no IEEE address, a
+        randomly or pseudo-randomly generated value may be used"</em>) seem to
+        indicate that using the MAC address on the system is the more correct
+        or normal case.
+
+        <p>So just for clarity I want to specifically point out here that if
+        there is a concern about privacy, just use a random value instead -
+        that is endorsed as a correct way of generating UUIDs in Version 6.
+        As specified in the RFC, random bytes should be generated
+        from a high quality source (i.e. use /dev/urandom instead of something
+        based on a deterministic algorithm [Mersenne Twister].)  The multicast
+        bit should be set as indicated in the RFC.
 
         <h3>Implementation</h3>
 
-        <p>A reference implementation has been written for the Go programming
-        language.  The actual code involved is quite simple, and <p>
+        <p><a href="https://github.com/bradleypeabody/gouuidv6">A reference implementation has been written in Go.</a>  The actual code involved is relatively simple and seems
+        to perform decently, feedback and pull requests welcome.<p>
 
-        <hr/>
+        <h3>Feedback:</h3>
+
+        <!-- <hr/> -->
 
 
 <div id="disqus_thread"></div>
@@ -102,7 +229,7 @@ var disqus_config = function () {
 
       </section>
       <footer>
-        <p><small>Hosted on GitHub Pages.</small></p>
+        <!-- <p><small>Hosted on GitHub Pages.</small></p> -->
       </footer>
     </div>
     <!--[if !IE]><script>fixScale(document);</script><![endif]-->
