@@ -1,0 +1,39 @@
+
+DELIMITER //
+CREATE DEFINER=`root`@`localhost` FUNCTION `uuidv1atov6b`(u1 BINARY(36))
+RETURNS BINARY(16) DETERMINISTIC
+RETURN UNHEX(CONCAT(
+	SUBSTR(u1, 16, 3),
+	SUBSTR(u1, 10, 4),
+	SUBSTR(u1, 1, 5),
+	'6',
+	SUBSTR(u1, 6, 3),
+	SUBSTR(u1, 20, 4),
+	SUBSTR(u1, 25)
+	));
+//
+DELIMITER ;
+
+DELIMITER //
+CREATE DEFINER=`root`@`localhost` FUNCTION `uuidbtoa`(u BINARY(16))
+RETURNS BINARY(36) DETERMINISTIC
+RETURN CONCAT(
+	HEX(SUBSTR(u, 1, 4)),
+	"-",
+	HEX(SUBSTR(u, 5, 2)),
+	"-",
+	HEX(SUBSTR(u, 7, 2)),
+	'-',
+	HEX(SUBSTR(u, 9, 2)),
+	"-",
+	HEX(SUBSTR(u, 11, 6))
+	);
+//
+DELIMITER ;
+
+
+-- for use as primary key:
+select uuidv1atov6b(uuid());
+
+-- to display:
+select uuidbtoa(uuidv1atov6b(uuid()));

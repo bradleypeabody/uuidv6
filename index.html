@@ -200,6 +200,128 @@ in terms of their bit sizes.   Hopefully all that is apparent.</span>
         <p><a href="https://github.com/bradleypeabody/gouuidv6">A reference implementation has been written in Go.</a>  The actual code involved is relatively simple and seems
         to perform decently, feedback and pull requests welcome.<p>
 
+        <h3>Hacks</h3>
+
+        <p>It is somewhat trivial to convert between Version 1 and Version 6
+        UUIDs, since the information they contain is the same just in
+        different positions.  In environments where an implementation of
+        Version 1 exists, converting this output to Version 6 may be
+        the simplest implementation.  Here are some examples of how to do this
+        in various languages:</p>
+
+        <h4>C:</h4>
+
+<pre><code>#include <stdio.h>
+#include &lt;stdint.h>
+#include &lt;inttypes.h>
+#include &lt;arpa/inet.h>
+#include &lt;uuid/uuid.h>
+
+/* Converts UUID version 1 to version 6 in place. */
+void uuidv1tov6(uuid_t u) {
+
+  uint64_t ut;
+  unsigned char *up = (unsigned char *)u;
+
+  // load ut with the first 64 bits of the UUID
+  ut = ((uint64_t)ntohl(*((uint32_t*)up))) &lt;&lt; 32;
+  ut |= ((uint64_t)ntohl(*((uint32_t*)&amp;up[4])));
+
+  // dance the bit-shift...
+  ut = 
+    ((ut >> 32) &amp; 0x0FFF) | // 12 least significant bits
+    (0x6000) | // version number
+    ((ut >> 28) &amp; 0x0000000FFFFF0000) | // next 20 bits
+    ((ut &lt;&lt; 20) &amp; 0x000FFFF000000000) | // next 16 bits
+    (ut &lt;&lt; 52); // 12 most significant bits
+
+  // store back in UUID
+  *((uint32_t*)up) = htonl((uint32_t)(ut >> 32));
+  *((uint32_t*)&amp;up[4]) = htonl((uint32_t)(ut));
+
+}
+
+int main(int argc, char **argv) {
+
+  uuid_t u;
+  char str[37];
+
+  uuid_generate_time(u);
+
+  uuid_unparse(u, str);
+  printf("UUIDv1: %s\n", str);
+
+  uuidv1tov6(u);
+
+  uuid_unparse(u, str);
+  printf("UUIDv6: %s\n", str);
+
+  return 0;
+}
+</code></pre>
+
+        <h4>Python 2/3:</h4>
+
+<pre><code>import uuid
+
+def uuidv1tov6(u):
+  uh = u.hex
+  tlo1 = uh[:5]
+  tlo2 = uh[5:8]
+  tmid = uh[8:12]
+  thig = uh[13:16]
+  rest = uh[16:]
+  uh6 = thig + tmid + tlo1 + '6' + tlo2 + rest
+  return uuid.UUID(hex=uh6)
+
+u = uuidv1tov6(uuid.uuid1())
+
+</code></pre>
+
+        <h4>MySQL/MariaDB/Percona:</h4>
+
+        <p>n.b. Basic idea <a target="_blank" href="https://www.percona.com/blog/2014/12/19/store-uuid-optimized-way/">borrowed from here,</a> adjusted to match definition above.</p>
+
+<pre><code>DELIMITER //
+CREATE DEFINER=`root`@`localhost` FUNCTION `uuidv1atov6b`(u1 BINARY(36))
+RETURNS BINARY(16) DETERMINISTIC
+RETURN UNHEX(CONCAT(
+  SUBSTR(u1, 16, 3),
+  SUBSTR(u1, 10, 4),
+  SUBSTR(u1, 1, 5),
+  '6',
+  SUBSTR(u1, 6, 3),
+  SUBSTR(u1, 20, 4),
+  SUBSTR(u1, 25)
+  ));
+//
+DELIMITER ;
+
+DELIMITER //
+CREATE DEFINER=`root`@`localhost` FUNCTION `uuidbtoa`(u BINARY(16))
+RETURNS BINARY(36) DETERMINISTIC
+RETURN CONCAT(
+  HEX(SUBSTR(u, 1, 4)),
+  "-",
+  HEX(SUBSTR(u, 5, 2)),
+  "-",
+  HEX(SUBSTR(u, 7, 2)),
+  '-',
+  HEX(SUBSTR(u, 9, 2)),
+  "-",
+  HEX(SUBSTR(u, 11, 6))
+  );
+//
+DELIMITER ;
+
+-- for use as primary key:
+select uuidv1atov6b(uuid());
+
+-- to display:
+select uuidbtoa(uuidv1atov6b(uuid()));
+
+</code></pre>
+
         <h3>Feedback:</h3>
 
         <!-- <hr/> -->
